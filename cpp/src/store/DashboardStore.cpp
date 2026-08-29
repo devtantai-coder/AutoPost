@@ -20,13 +20,18 @@ namespace DashboardStore
 
 namespace
 {
+// Kích thước tối đa của khối "log" (nhật ký màn hình) lưu vào dashboard.json:
+// nhật ký đầy đủ có thể hàng trăm KB; cắt tại mốc này để file không phình và
+// mỗi lần auto-save (30s) không phải tuần tự hóa/triết ra khối văn bản khổng lồ.
+constexpr int kMaxDashboardLogChars = 20000;
 // posts.json: { "ngày": { "accountId": [ {time, account, group, ok} ... ] } }
 QJsonObject loadPosts()
 {
-    // DailyPostLog ghi gộp (64 bài/lần): xả phần đang chờ xuống đĩa trước khi đọc
-    // để dashboard/báo cáo luôn đủ số liệu mới nhất (không khóa kèm — flush tự
-    // khóa trong).
-    DailyPostLog::flush();
+    // Không còn flush-then-read (2 lần khóa DataStore::mutex + 2 lần I/O đĩa
+    // mỗi lần dashboard được vẽ): đọc file TRỰC TIẾP trong đúng 1 khóa. Dữ
+    // liệu RAM cache của DailyPostLog chỉ lệch tối đa 64 bài / 5 giây so với
+    // đĩa — dashboard là thống kê, không cần thời gian thực chính xác đến mức
+    // phải trả giá 2 lần khóa mutex trên UI thread.
     QMutexLocker lock(&DataStore::mutex());
     return DataStore::readObject(QStringLiteral("posts.json"));
 }
@@ -118,8 +123,8 @@ QJsonObject loadDailyLog()
 
 QJsonObject loadPostedToday()
 {
-    // Xả cache trì hoãn ghi của PostedStore trước khi đọc file (luôn đủ dữ liệu).
-    PostedStore::flush();
+    // Tương tự loadPosts: đọc trong 1 khóa, không xả cache PostedStore (5s)
+    // chỉ để lấy số liệu thống kê — tránh spike I/O trên UI thread.
     QMutexLocker lock(&DataStore::mutex());
     return DataStore::readObject(QStringLiteral("posted_today.json"));
 }
@@ -172,7 +177,15 @@ bool saveAll(const QString &path, const QVector<FacebookGroup> &groups,
 
     root.insert(QStringLiteral("daily_log"), loadDailyLog());
     root.insert(QStringLiteral("posted_today"), loadPostedToday());
-    root.insert(QStringLiteral("log"), logText);
+    // Cắt nhật ký màn hình tại mốc an toàn: khối này chỉ để xem lại, không cần
+    // nguyên văn — giữ bản mới nhất (cuối chuỗi) vì đó là hoạt động gần nhất.
+    QString trimmedLog = logText;
+    if (trimmedLog.size() > kMaxDashboardLogChars) {
+        const int cut = trimmedLog.size() - kMaxDashboardLogChars;
+        const int nl = trimmedLog.indexOf(QLatin1Char('\n'), cut);
+        trimmedLog = trimmedLog.mid(nl >= 0 ? nl + 1 : cut);
+    }
+    root.insert(QStringLiteral("log"), trimmedLog);
     root.insert(QStringLiteral("saved_at"),
                 QDateTime::currentDateTime().toString(Qt::ISODate));
 

@@ -34,10 +34,18 @@ bool WebDriver::enableDomains()
     if (!m_cdp)
         return false;
     // Enable không cần chờ phản hồi: CDP thực thi theo thứ tự trên cùng kết nối,
-    // nên 3 lệnh này luôn xong trước các lệnh dùng domain (Page/Network) phía sau.
+    // nên các lệnh này luôn xong trước các lệnh dùng domain (Page/Runtime) phía sau.
+    // KHÔNG bật Network domain: không có code nào đọc sự kiện Network.* nhưng
+    // Chrome sẽ bắn hàng chục nghìn event Network.requestWillBeSent/responseReceived
+    // mỗi giây cho MỌI tài nguyên của trang Facebook — parse JSON từng event này
+    // (trong CdpClient::onTextMessageReceived) từng đốt CPU lớn khi mở nhiều tab.
     m_cdp->sendCommand(QStringLiteral("Runtime.enable"), {}, 0, false);
     m_cdp->sendCommand(QStringLiteral("Page.enable"), {}, 0, false);
-    m_cdp->sendCommand(QStringLiteral("Network.enable"), {}, 0, false);
+    // Theo dõi sẵn sự kiện load ngay khi bật domain: domContentEventFired có thể
+    // nổ trong lúc lệnh khác đang chờ phản hồi (chưa ai gọi waitForEvent) —
+    // nếu chưa được theo dõi, event sẽ bị bộ lọc chuỗi thô drop và lần chờ
+    // kế tiếp phải chịu nguyên timeout. Đây là method duy nhất app cần.
+    m_cdp->watchEvent(QStringLiteral("Page.domContentEventFired"));
     return true;
 }
 
@@ -355,7 +363,12 @@ bool WebDriver::waitForReady(int timeoutMs)
     // thường trễ 2-10s so với DOMContentLoaded. DOM sẵn sàng (readyState
     // !='loading') là đủ để thao tác DOM -> ưu tiên chờ domContentEventFired,
     // giảm rõ rệt thời gian "chờ trang" mỗi lần điều hướng.
-    m_cdp->clearRecentEvent(QStringLiteral("Page.domContentEventFired"));
+    // KHÔNG clearRecentEvent ở đây: navigate() đã clear TRƯỚC KHI gửi lệnh
+    // navigate, nên mọi Page.domContentEventFired trong buffer đều thuộc lần
+    // điều hướng hiện tại. Clear lần nữa ngay trước khi chờ sẽ xóa dấu vết
+    // sự kiện vừa nổ trong khi lệnh navigate chưa trả về — JoinEngine /
+    // NurtureEngine gọi waitForReady sau navigate sẽ bị đốt nguyên timeout
+    // (10-30s mỗi lần) chỉ để rồi fallback ở bước cuối.
     if (m_cdp->waitForEvent(QStringLiteral("Page.domContentEventFired"), 0))
         return true;
     if (m_cdp->waitForEvent(QStringLiteral("Page.domContentEventFired"), timeoutMs))

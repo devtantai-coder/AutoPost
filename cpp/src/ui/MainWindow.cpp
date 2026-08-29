@@ -2229,9 +2229,12 @@ void MainWindow::autoSaveDashboard()
 {
     if (!m_txtLog)
         return;
+    // document()->toPlainText() thay vì QTextEdit::toPlainText(): lấy text từ
+    // QTextDocument trực tiếp, không trải layout QTextEdit (bản deprecated tốn
+    // chi phí lớn khi log đã có ~1000 khối, gọi mỗi 30s trên UI thread).
     DashboardStore::saveAll(DataStore::filePath(QStringLiteral("dashboard.json")),
                             m_groups, m_config.accounts, m_config,
-                            m_txtLog->toPlainText());
+                            m_txtLog->document()->toPlainText());
 }
 
 void MainWindow::doBackup()

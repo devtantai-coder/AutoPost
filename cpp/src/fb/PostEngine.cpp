@@ -196,49 +196,45 @@ bool PostEngine::isRateLimited()
 
 bool PostEngine::isCheckpoint()
 {
-    const QString url = m_driver->currentUrl().toLower();
-
-    // 1) Tín hiệu URL mạnh nhất: trạng thái checkpoint/bảo mật của tài khoản.
-    if (url.contains(QStringLiteral("checkpoint")) ||
-        url.contains(QStringLiteral("security_check")) ||
-        url.contains(QStringLiteral("/recover/")) ||
-        url.contains(QStringLiteral("/blocked/")) ||
-        url.contains(QStringLiteral("account_quality")) ||
-        url.contains(QStringLiteral("help/105981904992768")))
-        return true;
-
-    // 2) Trên trang nhóm KHÔNG đọc body.innerText (12KB) — body check phía dưới
-    //    bị bỏ qua trên trang nhóm, nên chỉ lấy tiêu đề + heading: nhẹ hơn nhiều
-    //    (không gây reflow toàn trang Facebook, nơi body có thể rất lớn).
-    const bool onGroupPage = url.contains(QStringLiteral("/groups/"));
-
-    // 3) Lấy tiêu đề, các tiêu đề đoạn và văn bản hiển thị (không quét mã nguồn
-    //    để tránh nhầm lẫn với chuỗi nhúng trong script/JSON của Facebook).
-    const QJsonValue v = m_driver->evaluate(
-        onGroupPage ? QStringLiteral(
-                          "(function(){"
-                          "var t=(document.title||'').toLowerCase();"
-                          "var h='';"
-                          "var ns=document.querySelectorAll('h1,h2,h3,[role=heading],strong');"
-                          "for(var i=0;i<ns.length&&i<8;i++){var tx=(ns[i].innerText||'').toLowerCase();if(tx)h+=tx+' ';}"
-                          "return JSON.stringify({t:t,h:h,b:''});})()")
-                    : QStringLiteral(
-                          "(function(){"
-                          "var t=(document.title||'').toLowerCase();"
-                          "var h='';"
-                          "var ns=document.querySelectorAll('h1,h2,h3,[role=heading],strong');"
-                          "for(var i=0;i<ns.length&&i<8;i++){var tx=(ns[i].innerText||'').toLowerCase();if(tx)h+=tx+' ';}"
-                          "var b=(document.body&&document.body.innerText)?document.body.innerText.toLowerCase():'';"
-                          "return JSON.stringify({t:t,h:h,b:b.substring(0,12000)});"
-                          "})()"),
+    // Gộp 2 round-trip CDP thành 1: trước đây currentUrl() (1 evaluate) rồi
+    // evaluate riêng lấy dấu hiệu trang (1 evaluate nữa) — isCheckpoint được
+    // gọi nhiều lần mỗi bài (sau navigate, sau fail...) nên tiết kiệm cộng
+    // dồn đáng kể trên mỗi bài đăng.
+    const QJsonValue v = m_driver->evaluate(QStringLiteral(
+        "(function(){"
+        "var u=location.href.toLowerCase();"
+        // 1) Tín hiệu URL mạnh nhất: trạng thái checkpoint/bảo mật của tài khoản.
+        //    URL đã đủ kết luận -> không cần đọc DOM (tiết kiệm thêm innerText
+        //    12KB trên trang chặn).
+        "if(u.indexOf('checkpoint')>=0||u.indexOf('security_check')>=0||"
+        "u.indexOf('/recover/')>=0||u.indexOf('/blocked/')>=0||"
+        "u.indexOf('account_quality')>=0||u.indexOf('help/105981904992768')>=0)"
+        "return JSON.stringify({u:u,stop:true});"
+        // 2) Lấy tiêu đề + các heading + (nếu KHÔNG ở trang nhóm) body text.
+        //    Trên trang nhóm bỏ qua body.innerText (12KB, có thể gây reflow)
+        //    vì cụm từ như "bị chặn" trên trang nhóm là mô tả nhóm, không phải
+        //    trạng thái tài khoản — vừa nhẹ hơn vừa tránh báo nhầm.
+        "var t=(document.title||'').toLowerCase();"
+        "var h='';"
+        "var ns=document.querySelectorAll('h1,h2,h3,[role=heading],strong');"
+        "for(var i=0;i<ns.length&&i<8;i++){var tx=(ns[i].innerText||'').toLowerCase();if(tx)h+=tx+' ';}"
+        "var onGroup=u.indexOf('/groups/')>=0;"
+        "var b=(onGroup||!document.body||!document.body.innerText)?''"
+        ":document.body.innerText.toLowerCase().substring(0,12000);"
+        "return JSON.stringify({u:u,t:t,h:h,b:b});})()"),
         5000);
     if (!v.isString())
         return false;
 
     const QJsonObject o = QJsonDocument::fromJson(v.toString().toUtf8()).object();
+    if (o.value(QStringLiteral("stop")).toBool())
+        return true;
+
     const QString title = o.value(QStringLiteral("t")).toString();
     const QString headings = o.value(QStringLiteral("h")).toString();
     const QString body = o.value(QStringLiteral("b")).toString();
+    const bool onGroupPage =
+        o.value(QStringLiteral("u")).toString().contains(QStringLiteral("/groups/"));
 
     // 3) Cụm từ khẳng định trong tiêu đề trang hoặc tiêu đề đoạn (h1/h2/heading):
     //    chắc chắn thuộc về trang chặn, không phải nội dung nhóm.
@@ -259,8 +255,8 @@ bool PostEngine::isCheckpoint()
     }
 
     // 4) Văn bản hiển thị trên thân trang. Chỉ tin tưởng khi KHÔNG còn ở trang
-    //    nhóm, vì trên trang nhóm cụm từ như "bị chặn" có thể mô tả nhóm chứ
-    //    không phải tài khoản (tránh đánh dấu nhầm).
+    //    nhóm — trên trang nhóm b='' (JS đã bỏ qua body) nên vòng dưới tự vô hiệu;
+    //    giữ early-return để khỏi quét chuỗi bodySigns khi không cần.
     if (onGroupPage)
         return false;
 

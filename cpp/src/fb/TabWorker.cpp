@@ -119,7 +119,8 @@ void TabWorker::run(const GroupBatch &pendingPtr, const IndexBatch &pendingOrigP
     // Cookie đã được tiêm vào trình duyệt (cookie jar dùng chung cho mọi tab),
     // không cần tải facebook.com trước: PostEngine tự điều hướng thẳng tới nhóm
     // đầu tiên, tiết kiệm 1 lần tải trang + chờ mỗi tab.
-    Utils::humanPause(1000, 2000);
+    // (Bỏ humanPause khởi đầu 1-2s/tab: CDP đã sẵn sàng, PostEngine đã có đủ
+    // nhịp "người" trong từng bước; với 10 tab đây là 1-2s chết trên MỌI bài.)
 
     PostEngine engine(&driver);
 
