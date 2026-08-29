@@ -1,0 +1,30 @@
+# Build artifacts
+cpp/build/
+cpp/.qt/
+cpp/Archive.tar.gz
+cpp/CMakeLists.txt copy
+
+# Runtime data (cookies, accounts, personal config)
+cpp/src/data/app.lock
+cpp/src/data/facebook_cookies.txt
+cpp/src/data/config.json
+cpp/src/data/dashboard.json
+cpp/src/data/groups.json
+cpp/src/data/rented.json
+cpp/src/data/posted.json
+cpp/src/data/daily_post_log.json
+cpp/src/data/daily_post_log.csv
+cpp/src/data/backup/
+cpp/src/data/logs/
+cpp/logs/
+cpp/src/data/*.log
+
+# IDE
+.vscode/
+.idea/
+*.user
+compile_commands.json
+
+# OS
+.DS_Store
+Thumbs.db
